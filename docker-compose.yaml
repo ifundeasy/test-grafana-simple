@@ -1,0 +1,74 @@
+name: grafana-simple
+
+services:
+  alloy:
+    container_name: alloy
+    image: grafana/alloy:v1.9.1
+    ports:
+      - "12345:12345"
+      - "4316:4316" # new loki host as forwarder
+      - "4317:4317" # new tempo (grpc) host as forwarder -> otel collector
+      - "4318:4318" # new tempo (http) host as forwarder -> otel collector
+      - "4319:4319" # new pyroscope host as forwarder -> otel collector
+    volumes:
+      - "./config.alloy:/etc/alloy/config.alloy"
+    command: [
+      "run",
+      "--server.http.listen-addr=0.0.0.0:12345",
+      "--stability.level=public-preview",
+      "/etc/alloy/config.alloy",
+    ]
+
+  loki:
+    container_name: loki
+    image: grafana/loki:3.4.4
+    command:
+      ["--pattern-ingester.enabled=true", "-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki.yaml:/etc/loki/loki.yaml
+
+  tempo:
+    container_name: tempo
+    image: grafana/tempo:2.8.1
+    command: "-config.file=/etc/tempo.yaml"
+    restart: always
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"
+
+  mimir:
+    container_name: mimir
+    image: grafana/mimir:2.15.3
+    command:
+      [
+        "-ingester.native-histograms-ingestion-enabled=true",
+        "-config.file=/etc/mimir.yaml",
+      ]
+    ports:
+      - "9009:9009"
+    volumes:
+      - "./mimir.yaml:/etc/mimir.yaml"
+
+  pyroscope:
+    container_name: pyroscope
+    image: grafana/pyroscope:1.13.5
+    ports:
+      - "4040:4040"
+    command: ["server"]
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:12.0.2
+    volumes:
+      - "./grafana.yaml:/etc/grafana/provisioning/datasources/datasources.yaml"
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_FEATURE_TOGGLES_ENABLE=flameGraph traceqlSearch traceQLStreaming correlations metricsSummary traceqlEditor traceToMetrics traceToProfiles datatrails
+      - GF_INSTALL_PLUGINS=grafana-lokiexplore-app,grafana-exploretraces-app,grafana-pyroscope-app
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true

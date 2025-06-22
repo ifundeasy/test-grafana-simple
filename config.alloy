@@ -1,0 +1,127 @@
+logging {
+	level = "debug"
+}
+
+livedebugging {
+	enabled = true
+}
+
+/////////////////////////////////////
+// NEW HOST CONFIGURATION
+/////////////////////////////////////
+loki.source.api "remote_log" {
+	http {
+		listen_address = "0.0.0.0"
+		listen_port    = 4316
+	}
+
+	forward_to = [loki.process.remote_log_processor.receiver]
+
+	labels = {
+		job    = "remote-logs",
+		source = "alloy-push",
+	}
+}
+
+otelcol.receiver.otlp "client" {
+	grpc {
+		endpoint = "0.0.0.0:4317"
+	}
+
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		traces  = [otelcol.processor.batch.trace_processor.input]
+		metrics = [otelcol.processor.batch.trace_processor.input]
+	}
+}
+
+pyroscope.receive_http "profiles" {
+	http {
+		listen_address = "0.0.0.0"
+		listen_port    = 4319
+	}
+
+	forward_to = [pyroscope.write.pyroscope_server.receiver]
+}
+
+/////////////////////////////////////
+// WRITERS CONFIGURATION
+/////////////////////////////////////
+loki.write "loki_server" {
+	// external_labels = {
+	// 	custom_field = "alloy-observability",
+	// }
+
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+
+		// headers = {
+		// 	"X-Scope-OrgID" = "tenant-1"
+		// }
+	}
+}
+
+otelcol.exporter.otlp "tempo_server" {
+	client {
+		endpoint = "http://tempo:4317"
+
+		tls {
+			insecure             = true
+			insecure_skip_verify = true
+		}
+	}
+}
+
+prometheus.remote_write "mimir_server" {
+	endpoint {
+		url = "http://mimir:9009/api/v1/push"
+
+		// headers = {
+		// 	"X-Scope-OrgID" = "tenant-1"
+		// }
+	}
+}
+
+pyroscope.write "pyroscope_server" {
+	endpoint {
+		url = "http://pyroscope:4040"
+
+		// headers = {
+		// 	"X-Scope-OrgID" = "tenant-1"
+		// }
+	}
+}
+
+
+/////////////////////////////////////
+// LOKI LOG PROCESSORS (FROM HTTP CLIENT)
+/////////////////////////////////////
+loki.process "remote_log_processor" {
+	// Process logs from the remote_log source in here...
+	//
+	forward_to = [loki.write.loki_server.receiver]
+}
+
+/////////////////////////////////////
+// OTELCOL TRACE PROCESSING → TEMPO + SPANMETRICS
+/////////////////////////////////////
+otelcol.processor.batch "trace_processor" {
+	send_batch_size     = 1000
+	send_batch_max_size = 2000
+	timeout             = "2s"
+
+	output {
+		traces  = [otelcol.exporter.otlp.tempo_server.input]
+		metrics = [otelcol.exporter.prometheus.metric_processor.input]
+	}
+}
+
+/////////////////////////////////////
+// SPANMETRICS → PROMETHEUS → MIMIR
+/////////////////////////////////////
+otelcol.exporter.prometheus "metric_processor" {
+	forward_to = [prometheus.remote_write.mimir_server.receiver]
+}
